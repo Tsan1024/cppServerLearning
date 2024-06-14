@@ -40,38 +40,44 @@ int main() {
         close(server_fd);
         exit(EXIT_FAILURE);
     }
-
     std::cout << "等待连接..." << std::endl;
-    while (1) {
-        // 接受连接
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&address,
-                                 &addrlen)) < 0) {
-            perror("accept");
-            close(server_fd);
-            exit(EXIT_FAILURE);
-        }
+    // 接受连接
+    if ((new_socket =
+             accept(server_fd, (struct sockaddr *)&address, &addrlen)) < 0) {
+        perror("accept");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+    // 处理客户端连接
+    while (true) {
 
         std::cout << "连接来自 " << inet_ntoa(address.sin_addr) << ":"
                   << ntohs(address.sin_port) << std::endl;
-
         // 读取数据
         int valread = read(new_socket, buffer, BUFFER_SIZE);
+        if (valread <= 0) {
+            std::cout << "客户端断开连接" << std::endl;
+            close(new_socket);
+            break;
+        }
+
+        buffer[valread] = '\0'; // 确保缓冲区以空字符结尾
         std::cout << "收到数据: " << buffer << std::endl;
 
         // 发送响应
         std::string response = "server: ";
         response.append(buffer);
+        send(new_socket, response.c_str(), response.length(), 0);
+        std::cout << "回送数据: " << response << std::endl;
+
+        // 检查退出条件
         if (strcmp(buffer, "exit") == 0) {
             std::cout << "接收到退出消息，断开连接" << std::endl;
             break;
         }
-        send(new_socket, response.c_str(), strlen(response.c_str()), 0);
-        std::cout << "回送数据: " << response << std::endl;
-        memset(buffer, 0, sizeof(buffer));
-        if (valread == 0) {
-            close(new_socket);
-            std::cout << "客户端断开。" << std::endl; // 有些问题
-        }
+
+        // 清空缓冲区
+        memset(buffer, 0, BUFFER_SIZE);
     }
 
     // 关闭连接

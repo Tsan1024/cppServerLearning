@@ -7,3 +7,4 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # 添加子目录 step1
 add_subdirectory(step1)
+add_subdirectory(step2)
