@@ -1,12 +1,12 @@
+
 #pragma once
-#include <atomic>
+
 #include <boost/lockfree/queue.hpp>
 #include <functional>
 #include <future>
-#include <thread>
 #include <vector>
 
-namespace ThreadPool {
+namespace ThreadPoolErrorExample {
 
 class ThreadPool {
   public:
@@ -25,13 +25,13 @@ class ThreadPool {
     std::vector<std::thread> workers;
 
     // 任务队列
-    boost::lockfree::queue<std::function<void()> *> tasks;
+    boost::lockfree::queue<std::function<void()>> tasks;
 
     std::atomic<bool> stop;
 };
 
 // 构造函数，启动指定数量的工作线程
-inline ThreadPool::ThreadPool(size_t num_threads) : tasks(128), stop(false) {
+inline ThreadPool::ThreadPool(size_t num_threads) : stop(false) {
     for (size_t i = 0; i < num_threads; ++i)
         workers.emplace_back([this] { worker_thread(); });
 }
@@ -41,12 +41,6 @@ inline ThreadPool::~ThreadPool() {
     stop.store(true);
     for (std::thread &worker : workers)
         worker.join();
-
-    // 清理剩余的任务
-    std::function<void()> *task;
-    while (tasks.pop(task)) {
-        delete task;
-    }
 }
 
 // 添加任务到线程池的队列中
@@ -61,23 +55,22 @@ auto ThreadPool::enqueue(F &&f,
     std::future<return_type> res = task->get_future();
 
     // 向队列中添加任务
-    auto wrapped_task = new std::function<void()>([task]() { (*task)(); });
-    while (!tasks.push(wrapped_task)) {
+    while (!tasks.push([task]() { (*task)(); })) {
     }
+
     return res;
 }
 
 // 工作线程函数，从队列中取出任务并执行
 inline void ThreadPool::worker_thread() {
     while (!stop.load()) {
-        std::function<void()> *task;
+        std::function<void()> task;
         if (tasks.pop(task)) {
-            (*task)();
-            delete task;
+            task();
         } else {
             std::this_thread::yield(); // 防止 busy waiting
         }
     }
 }
 
-} // namespace ThreadPool
+} // namespace ThreadPoolErrorExample
