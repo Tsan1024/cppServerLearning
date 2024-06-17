@@ -1,11 +1,11 @@
-
-#pragma once
-
-#include <boost/lockfree/queue.hpp>
+#include <condition_variable>
 #include <functional>
 #include <future>
-
-namespace ThreadPool {
+#include <iostream>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <vector>
 
 class ThreadPool {
   public:
@@ -24,9 +24,12 @@ class ThreadPool {
     std::vector<std::thread> workers;
 
     // 任务队列
-    boost::lockfree::queue<std::function<void()>> tasks;
+    std::queue<std::function<void()>> tasks;
 
-    std::atomic<bool> stop;
+    // 互斥量和条件变量用于线程同步
+    std::mutex queue_mutex;
+    std::condition_variable condition;
+    bool stop;
 };
 
 // 构造函数，启动指定数量的工作线程
@@ -37,7 +40,11 @@ inline ThreadPool::ThreadPool(size_t num_threads) : stop(false) {
 
 // 析构函数，等待所有线程完成后销毁线程池
 inline ThreadPool::~ThreadPool() {
-    stop.store(true);
+    {
+        std::unique_lock<std::mutex> lock(queue_mutex);
+        stop = true;
+    }
+    condition.notify_all();
     for (std::thread &worker : workers)
         worker.join();
 }
@@ -52,24 +59,42 @@ auto ThreadPool::enqueue(F &&f,
         std::bind(std::forward<F>(f), std::forward<Args>(args)...));
 
     std::future<return_type> res = task->get_future();
+    {
+        std::unique_lock<std::mutex> lock(queue_mutex);
 
-    // 向队列中添加任务
-    while (!tasks.push([task]() { (*task)(); })) {
+        // 不允许在关闭线程时添加更多的任务
+        if (stop)
+            throw std::runtime_error("enqueue on stopped ThreadPool");
+
+        // 向队列中添加任务
+        tasks.emplace([task]() { (*task)(); });
     }
-
+    condition.notify_one();
     return res;
 }
 
 // 工作线程函数，从队列中取出任务并执行
 inline void ThreadPool::worker_thread() {
-    while (!stop.load()) {
+    while (true) {
         std::function<void()> task;
-        if (tasks.pop(task)) {
-            task();
-        } else {
-            std::this_thread::yield(); // 防止 busy waiting
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            // 等待直到队列非空或者线程池被销毁
+            condition.wait(lock, [this] { return stop || !tasks.empty(); });
+            if (stop && tasks.empty())
+                return;
+            // 取出队列中的任务
+            task = std::move(tasks.front());
+            tasks.pop();
         }
+        // 执行任务
+        task();
     }
 }
 
-} // namespace ThreadPool
+// 使用示例
+void example_task(int num) {
+    std::cout << "Task " << num << " is running\n";
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::cout << "Task " << num << " is done\n";
+}

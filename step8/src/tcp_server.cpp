@@ -5,9 +5,12 @@
 #include <cstring>
 #include <iostream>
 #include <netinet/in.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#define MAX_EVENTS 10
 
 class Server {
   public:
@@ -28,6 +31,7 @@ class Server {
     socklen_t addrlen;
     std::shared_ptr<spdlog::logger> logger;
     ThreadPool::ThreadPool thread_pool;
+    int epoll_fd;
 };
 
 Server::Server(int port, int buffer_size, int max_pending_connections,
@@ -40,7 +44,10 @@ Server::Server(int port, int buffer_size, int max_pending_connections,
     init();
 }
 
-Server::~Server() { close(server_fd); }
+Server::~Server() {
+    close(server_fd);
+    close(epoll_fd);
+}
 
 void Server::init() {
     // 创建socket文件描述符
@@ -67,27 +74,65 @@ void Server::init() {
         close(server_fd);
         exit(EXIT_FAILURE);
     }
+
+    // 创建epoll实例
+    epoll_fd = epoll_create1(0);
+    if (epoll_fd == -1) {
+        logger->error("epoll_create1 failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    struct epoll_event event;
+    event.events = EPOLLIN;
+    event.data.fd = server_fd;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_fd, &event) == -1) {
+        logger->error("epoll_ctl failed");
+        close(server_fd);
+        close(epoll_fd);
+        exit(EXIT_FAILURE);
+    }
+
     logger->info("Waiting for connections...");
 }
 
 void Server::run() {
-    int new_socket;
+    struct epoll_event events[MAX_EVENTS];
     while (true) {
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&address,
-                                 &addrlen)) < 0) {
-            logger->error("accept failed");
+        int num_fds = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+        if (num_fds == -1) {
+            logger->error("epoll_wait failed");
             continue;
         }
-        logger->info("Connection from {}:{}", inet_ntoa(address.sin_addr),
-                     ntohs(address.sin_port));
 
-        thread_pool.enqueue(
-            [this, new_socket]() { handle_client(new_socket); });
-        // std::thread client_thread(&Server::handle_client, this, new_socket);
-        // //  std::thread
-        // //
-        // 的构造函数不直接接受非静态成员函数作为参数。需要传递成员函数指针以及对象实例给线程构造函数
-        // client_thread.detach();
+        for (int i = 0; i < num_fds; ++i) {
+            if (events[i].data.fd == server_fd) {
+                // 处理新连接
+                int new_socket;
+                if ((new_socket = accept(server_fd, (struct sockaddr *)&address,
+                                         &addrlen)) < 0) {
+                    logger->error("accept failed");
+                    continue;
+                }
+                logger->info("Connection from {}:{}",
+                             inet_ntoa(address.sin_addr),
+                             ntohs(address.sin_port));
+
+                struct epoll_event event;
+                event.events = EPOLLIN | EPOLLET;
+                event.data.fd = new_socket;
+                if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, new_socket, &event) ==
+                    -1) {
+                    logger->error("epoll_ctl failed");
+                    close(new_socket);
+                }
+            } else {
+                // 处理已连接客户端的数据
+                int client_socket = events[i].data.fd;
+                thread_pool.enqueue(
+                    [this, client_socket]() { handle_client(client_socket); });
+            }
+        }
     }
 }
 
@@ -96,7 +141,11 @@ void Server::handle_client(int client_socket) {
     while (true) {
         int valread = read(client_socket, buffer, buffer_size);
         if (valread <= 0) {
-            logger->info("Client disconnected");
+            if (valread == 0) {
+                logger->info("Client disconnected");
+            } else {
+                logger->error("read error");
+            }
             close(client_socket);
             break;
         }
