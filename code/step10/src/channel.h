@@ -17,6 +17,7 @@ class Channel {
     void setRevents(uint32_t rev);
     int getFd() const;
     uint32_t getEvents() const;
+    uint32_t getRevents() const;
 
   private:
     int fd;           // 文件描述符

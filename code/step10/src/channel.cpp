@@ -44,5 +44,11 @@ void Channel::setEvents(uint32_t ev) {
     spdlog::info("Events set for fd: {}, events: {}", fd, events);
 }
 
+void Channel::setRevents(uint32_t rev) {
+    revents = rev;
+    spdlog::info("Revents set for fd: {}, revents: {}", fd, revents);
+}
+
 int Channel::getFd() const { return fd; }
 uint32_t Channel::getEvents() const { return events; }
+uint32_t Channel::getRevents() const { return revents; }

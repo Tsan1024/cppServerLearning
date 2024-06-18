@@ -40,7 +40,7 @@ void Server::init() {
     }
 
     auto server_channel = std::make_shared<Channel>(server_fd);
-    server_channel->setEvents(EPOLLIN);
+    server_channel->setEvents(EPOLLIN | EPOLLET);
     server_channel->setReadCallback(
         [this, server_channel]() { this->accept_connection(server_channel); });
     epoll_manager.add(*server_channel);

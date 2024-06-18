@@ -35,6 +35,7 @@ void EpollManager::wait(int timeout) {
     }
     for (int i = 0; i < num_fds; i++) {
         Channel *channel = static_cast<Channel *>(events[i].data.ptr);
+        channel->setRevents(events[i].events);
         channel->handleEvent();
     }
 }
